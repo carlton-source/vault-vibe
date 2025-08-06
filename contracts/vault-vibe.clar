@@ -274,3 +274,94 @@
         (ok true)
     )
 )
+
+;; Secure Asset Withdrawal Function
+(define-public (withdraw (token-trait <sip-010-trait>) (amount uint))
+    (let
+        (
+            (user-principal tx-sender)
+            (current-deposit (default-to 
+                { amount: u0, last-deposit-block: u0 }
+                (map-get? user-deposits { user: user-principal })
+            ))
+        )
+        ;; Validation and security checks
+        (try! (validate-token token-trait))
+        (asserts! (<= amount (get amount current-deposit)) ERR-INSUFFICIENT-BALANCE)
+        
+        ;; Update user deposit record
+        (map-set user-deposits
+            { user: user-principal }
+            {
+                amount: (- (get amount current-deposit) amount),
+                last-deposit-block: (get last-deposit-block current-deposit)
+            }
+        )
+        
+        ;; Update total value locked
+        (var-set total-tvl (- (var-get total-tvl) amount))
+        
+        ;; Execute secure token transfer back to user
+        (as-contract
+            (try! (safe-token-transfer token-trait amount tx-sender user-principal))
+        )
+        
+        (ok true)
+    )
+)
+
+;; SECURE TOKEN OPERATIONS
+
+;; Safe Token Transfer with Validation
+(define-private (safe-token-transfer (token-trait <sip-010-trait>) (amount uint) (sender principal) (recipient principal))
+    (begin
+        (try! (validate-token token-trait))
+        (contract-call? token-trait transfer amount sender recipient none)
+    )
+)
+
+;; YIELD CALCULATION & REWARDS
+
+;; Advanced Yield Rewards Calculation
+(define-private (calculate-rewards (user principal) (blocks uint))
+    (let
+        (
+            (user-deposit (unwrap-panic (get-user-deposit user)))
+            (weighted-apy (get-weighted-apy))
+        )
+        ;; Calculate APY-based rewards using block progression
+        (/ (* (get amount user-deposit) weighted-apy blocks) (* u10000 u144 u365))
+    )
+)
+
+;; Claim Accumulated Rewards
+(define-public (claim-rewards (token-trait <sip-010-trait>))
+    (let
+        (
+            (user-principal tx-sender)
+            (rewards (calculate-rewards 
+                user-principal 
+                (- stacks-block-height 
+                   (get last-deposit-block (unwrap-panic (get-user-deposit user-principal)))
+                )
+            ))
+        )
+        ;; Validation checks
+        (try! (validate-token token-trait))
+        (asserts! (> rewards u0) ERR-INVALID-AMOUNT)
+        
+        ;; Update user rewards tracking
+        (map-set user-rewards
+            { user: user-principal }
+            {
+                pending: u0,
+                claimed: (+ rewards 
+                    (get claimed (default-to 
+                        { pending: u0, claimed: u0 }
+                        (map-get? user-rewards { user: user-principal })
+                    ))
+                )
+            }
+        )
+        
+        ;; Transfer rewards to user
