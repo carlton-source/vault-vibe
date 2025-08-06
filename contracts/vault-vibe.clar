@@ -365,3 +365,118 @@
         )
         
         ;; Transfer rewards to user
+        (as-contract
+            (try! (contract-call? token-trait transfer
+                rewards
+                tx-sender
+                user-principal
+                none
+            ))
+        )
+        
+        (ok rewards)
+    )
+)
+
+;; PORTFOLIO OPTIMIZATION ALGORITHMS
+
+;; Dynamic Protocol Rebalancing
+(define-private (rebalance-protocols)
+    (let
+        (
+            (total-allocations (fold + (map get-protocol-allocation (get-protocol-list)) u0))
+        )
+        (asserts! (<= total-allocations u10000) ERR-INVALID-AMOUNT)
+        (ok true)
+    )
+)
+
+;; Weighted APY Calculation Across All Protocols
+(define-private (get-weighted-apy)
+    (fold + (map get-weighted-protocol-apy (get-protocol-list)) u0)
+)
+
+;; Individual Protocol APY Weighting
+(define-private (get-weighted-protocol-apy (protocol-id uint))
+    (let
+        (
+            (protocol (unwrap-panic (get-protocol protocol-id)))
+            (allocation (get allocation (unwrap-panic 
+                (map-get? strategy-allocations { protocol-id: protocol-id })
+            )))
+        )
+        (if (get active protocol)
+            (/ (* (get apy protocol) allocation) u10000)
+            u0
+        )
+    )
+)
+
+;; READ-ONLY DATA ACCESS FUNCTIONS
+
+;; Get Protocol Information
+(define-read-only (get-protocol (protocol-id uint))
+    (map-get? protocols { protocol-id: protocol-id })
+)
+
+;; Get User Deposit Details
+(define-read-only (get-user-deposit (user principal))
+    (map-get? user-deposits { user: user })
+)
+
+;; Get Total Value Locked
+(define-read-only (get-total-tvl)
+    (var-get total-tvl)
+)
+
+;; Check Token Whitelist Status
+(define-read-only (is-whitelisted (token <sip-010-trait>))
+    (default-to false (get approved 
+        (map-get? whitelisted-tokens { token: (contract-of token) })
+    ))
+)
+
+;; ADMINISTRATIVE CONTROL FUNCTIONS
+
+;; Update Platform Fee Structure
+(define-public (set-platform-fee (new-fee uint))
+    (begin
+        (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+        (asserts! (<= new-fee u1000) ERR-INVALID-AMOUNT) ;; Max 10% fee
+        (var-set platform-fee-rate new-fee)
+        (ok true)
+    )
+)
+
+;; Emergency Shutdown Toggle
+(define-public (set-emergency-shutdown (shutdown bool))
+    (begin
+        (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+        (var-set emergency-shutdown shutdown)
+        (ok true)
+    )
+)
+
+;; Token Whitelist Management
+(define-public (whitelist-token (token principal))
+    (begin
+        (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+        (map-set whitelisted-tokens { token: token } { approved: true })
+        (ok true)
+    )
+)
+
+;; UTILITY & HELPER FUNCTIONS
+
+;; Supported Protocol IDs Registry
+(define-private (get-protocol-list)
+    (list u1 u2 u3 u4 u5) ;; Active protocol identifiers
+)
+
+;; Get Protocol Allocation Percentage
+(define-private (get-protocol-allocation (protocol-id uint))
+    (get allocation (default-to 
+        { allocation: u0 }
+        (map-get? strategy-allocations { protocol-id: protocol-id })
+    ))
+)
