@@ -178,3 +178,99 @@
         (ok true)
     )
 )
+
+;; Update Protocol Active Status
+(define-public (update-protocol-status (protocol-id uint) (active bool))
+    (begin
+        ;; Validation checks
+        (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+        (asserts! (is-valid-protocol-id protocol-id) ERR-INVALID-PROTOCOL-ID)
+        (asserts! (protocol-exists protocol-id) ERR-INVALID-PROTOCOL-ID)
+        
+        ;; Update protocol status
+        (let ((protocol (unwrap-panic (get-protocol protocol-id))))
+            (map-set protocols 
+                { protocol-id: protocol-id }
+                (merge protocol { active: active })
+            )
+        )
+        (ok true)
+    )
+)
+
+;; Update Protocol APY
+(define-public (update-protocol-apy (protocol-id uint) (new-apy uint))
+    (begin
+        ;; Validation checks
+        (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+        (asserts! (is-valid-protocol-id protocol-id) ERR-INVALID-PROTOCOL-ID)
+        (asserts! (protocol-exists protocol-id) ERR-INVALID-PROTOCOL-ID)
+        (asserts! (is-valid-apy new-apy) ERR-INVALID-APY)
+        
+        ;; Update protocol APY
+        (let ((protocol (unwrap-panic (get-protocol protocol-id))))
+            (map-set protocols 
+                { protocol-id: protocol-id }
+                (merge protocol { apy: new-apy })
+            )
+        )
+        (ok true)
+    )
+)
+
+;; TOKEN VALIDATION & SECURITY
+
+;; Enhanced Token Security Validation
+(define-private (validate-token (token-trait <sip-010-trait>))
+    (let 
+        (
+            (token-contract (contract-of token-trait))
+            (token-info (map-get? whitelisted-tokens { token: token-contract }))
+        )
+        (asserts! (is-some token-info) ERR-TOKEN-NOT-WHITELISTED)
+        (asserts! (get approved (unwrap-panic token-info)) ERR-PROTOCOL-NOT-WHITELISTED)
+        (ok true)
+    )
+)
+
+;; DEPOSIT & WITHDRAWAL MANAGEMENT
+
+;; Secure Asset Deposit Function
+(define-public (deposit (token-trait <sip-010-trait>) (amount uint))
+    (let
+        (
+            (user-principal tx-sender)
+            (current-deposit (default-to 
+                { amount: u0, last-deposit-block: u0 } 
+                (map-get? user-deposits { user: user-principal })
+            ))
+        )
+        ;; Security and validation checks
+        (try! (validate-token token-trait))
+        (asserts! (not (var-get emergency-shutdown)) ERR-STRATEGY-DISABLED)
+        (asserts! (>= amount (var-get min-deposit)) ERR-MIN-DEPOSIT-NOT-MET)
+        (asserts! 
+            (<= (+ amount (get amount current-deposit)) (var-get max-deposit)) 
+            ERR-MAX-DEPOSIT-REACHED
+        )
+        
+        ;; Execute secure token transfer
+        (try! (safe-token-transfer token-trait amount user-principal (as-contract tx-sender)))
+        
+        ;; Update user deposit record
+        (map-set user-deposits 
+            { user: user-principal }
+            { 
+                amount: (+ amount (get amount current-deposit)),
+                last-deposit-block: stacks-block-height
+            }
+        )
+        
+        ;; Update total value locked
+        (var-set total-tvl (+ (var-get total-tvl) amount))
+        
+        ;; Trigger portfolio rebalancing
+        (try! (rebalance-protocols))
+        (ok true)
+    )
+)
